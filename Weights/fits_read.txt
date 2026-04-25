@@ -1,0 +1,1 @@
+I currently have Fit1_GW.pt which was fit with 92 training images and 23 validation images with various surrounding game states. Classes are: (golden, wrath)
