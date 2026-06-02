@@ -11,22 +11,8 @@ import cv2
 # Future: Create Light GUI if adding additional functionality. (Selecting classes to click; Upgrades; Stock Market?)
 CONF_THRESHOLD = 0.8
 SCAN_INTERVAL = 5  # seconds
-DISPLAY = True
+DISPLAY = False
 # --------- User Input --------- #
-
-
-# ---------- Class Def --------- #
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
-                ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
-                ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
-
-class INPUT(ctypes.Structure):
-    _fields_ = [("type", ctypes.c_ulong), ("mi", MOUSEINPUT)]
-# ---------- Class Def --------- #
 
 
 # -------- Function Def -------- #
@@ -48,24 +34,11 @@ def find_window(title_substring):
     return found
 
 
-def get_window_rect(hwnd):
-    """Get the logical rect of a window via DwmGetWindowAttribute."""
+def capture_window(hwnd):
+    """Capture a window's content using PrintWindow"""
     rect = ctypes.wintypes.RECT()
     ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
-    return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
-
-
-def get_monitor_scale(hwnd):
-    """Get physical/logical scale factor using actual DPI from the monitor."""
-    monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)
-    dpi_x = ctypes.c_uint()
-    dpi_y = ctypes.c_uint()
-    ctypes.windll.shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
-    return dpi_x.value / 96.0  # 96 DPI = 100% scaling
-
-
-def capture_window(hwnd, w, h):
-    """Capture a window's content using PrintWindow — no need to foreground it."""
+    w, h = rect.right - rect.left, rect.bottom - rect.top
 
     hdc_win = ctypes.windll.user32.GetDC(hwnd)
     hdc_mem = ctypes.windll.gdi32.CreateCompatibleDC(hdc_win)
@@ -93,28 +66,20 @@ def capture_window(hwnd, w, h):
     return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
 
-def move_mouse(x, y):
-    """Move mouse using SendInput. Expects physical pixel coords."""
-    vl = ctypes.windll.user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
-    vt = ctypes.windll.user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
-    vw = ctypes.windll.user32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
-    vh = ctypes.windll.user32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+def click_at(hwnd, x, y):
+    """Click at logical coords relative to the window's client area."""
+    dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+    scale = dpi / 96.0  # 96 DPI = 100% scaling
 
-    inp = INPUT()
-    inp.type = 0
-    inp.mi.dx = int((x - vl) * 65535 / vw)
-    inp.mi.dy = int((y - vt) * 65535 / vh)
-    inp.mi.dwFlags = 0x0001 | 0x8000 | 0x4000  # MOVE | ABSOLUTE | VIRTUALDESK
-    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+    # Convert physical -> logical
+    lx = int(x / scale)
+    ly = int(y / scale)
 
-
-def click_mouse():
-    """Send a left click at the current cursor position."""
-    for flag in [0x0002, 0x0004]:  # LEFTDOWN, LEFTUP
-        inp = INPUT()
-        inp.type = 0
-        inp.mi.dwFlags = flag
-        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+    lparam = ctypes.wintypes.LPARAM((ly << 16) | (lx & 0xFFFF))
+    down = ctypes.windll.user32.PostMessageW(hwnd, 0x0201, 1, lparam)
+    up   = ctypes.windll.user32.PostMessageW(hwnd, 0x0202, 0, lparam)
+    if not down or not up:
+        print(f"Warning: click message dropped at ({x}, {y})")
 # -------- Function Def -------- #
 
 
@@ -129,45 +94,50 @@ if len(matches) > 1:
 
 hwnd, title = matches[0]
 print(f"Found window: '{title}' (HWND={hwnd})")
-
-mon_scale = get_monitor_scale(hwnd)
-print(f"Monitor scale: {mon_scale:.3f}")
 # ------- Setup Constants ------ #
 
 
 # -------- Main Process -------- #
-while True:
-    time.sleep(SCAN_INTERVAL)
+try:
+    while True:
+        if not ctypes.windll.user32.IsWindow(hwnd):
+            matches = find_window("Cookie Clicker")
+            if matches:
+                hwnd, title = matches[0]
+            else:
+                print("Window lost, retrying...")
+                time.sleep(SCAN_INTERVAL)
+                continue
 
-    if ctypes.windll.user32.IsIconic(hwnd):
-        ctypes.windll.user32.ShowWindow(hwnd, 4)  # SW_RESTORE
-        time.sleep(0.025)
+        if ctypes.windll.user32.IsIconic(hwnd):
+            ctypes.windll.user32.ShowWindow(hwnd, 4)  # SW_RESTORE
+            while ctypes.windll.user32.IsIconic(hwnd):  # wait for restore
+                time.sleep(0.005)
 
-    win_left, win_top, win_w, win_h = get_window_rect(hwnd)
-    frame = capture_window(hwnd, win_w, win_h)
+        try:
+            frame = capture_window(hwnd)
+        except Exception as e:
+            print(f"Capture failed: {e}")
+            time.sleep(SCAN_INTERVAL)
+            continue
 
-    detections = [box for box in model(frame, verbose=False)[0].boxes if float(box.conf[0]) >= CONF_THRESHOLD]
-    for box in detections:
-        x1, y1, x2, y2 = box.xyxy[0].tolist()
-        cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+        detections = [box for box in model(frame, verbose=False)[0].boxes if float(box.conf[0]) >= CONF_THRESHOLD]
+        for box in detections:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            click_at(hwnd, int((x1 + x2) / 2), int((y1 + y2) / 2))
 
-        pt = POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        prev_foreground = ctypes.windll.user32.GetForegroundWindow()
-        
-        move_mouse((win_left + cx) * mon_scale, (win_top + cy) * mon_scale)
-        click_mouse()
-        ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
-        ctypes.windll.user32.SetForegroundWindow(prev_foreground)
+            if DISPLAY:
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                cv2.putText(frame, f"{float(box.conf[0]):.2f}", (int(x1), int(y1) - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
         if DISPLAY:
-            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-            cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
-            cv2.putText(frame, f"{float(box.conf[0]):.2f}", (int(x1), int(y1) - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            print(f"Scan complete — {len(detections)} detection(s) found.")
+            cv2.imshow("Current View", frame)
+            cv2.waitKey(1)
+        
+        time.sleep(SCAN_INTERVAL)
 
-    if DISPLAY:
-        print(f"Scan complete — {len(detections)} detection(s) found.")
-        cv2.imshow("Current View", frame)
-        cv2.waitKey(1)
+finally:
+    cv2.destroyAllWindows()
 # -------- Main Process -------- #
