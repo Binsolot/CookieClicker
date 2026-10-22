@@ -1,30 +1,27 @@
-# Project
-
-This was a quick project, meant to be a very lightweight and simple autoclicker for golden cookies and wrath cookies. 
-It should work regardless of where the cookie clicker window is (for now the window must be visible, but not in focus)
-Let me know if there are issues or features you'd like!
-
 # GoldenClicker
 
-Automatically detects and clicks golden cookies in Cookie Clicker using a YOLO object detection model.
+A lightweight autoclicker for golden cookies, wrath cookies, etc. in Cookie Clicker. It connects to the game over the Chrome DevTools Protocol and pops shimmers directly through the game's own API.
+Because it never looks at the screen, the game window can be minimized, unfocused, or on any monitor at any DPI scaling.
+Let me know if there are issues or features you'd like!
 
+**Works on Windows, macOS, and Linux.**
 ## Requirements
+
 - Python 3.x
-- Cookie Clicker open in a browser window
+- Cookie Clicker (Steam version) launched with remote debugging enabled on port 9222
 
 ## Setup
-1. Install dependencies:
-   pip install ultralytics opencv-python mss numpy
 
-2. Run:
-   python GoldenClicker.py
+1. Install dependencies: `pip install websocket-client requests`
+2. In Steam, set Cookie Clicker's launch options to: `--remote-debugging-port=9222`
+3. Launch Cookie Clicker
+4. Run: `python GoldenClicker.py`
+
+## How it works
+
+On startup the script finds the game's tab at `localhost:9222`, connects over a websocket, and runs a small JavaScript snippet that pops every entry in `Game.shimmers`. If something was popped, it checks again after 0.5 seconds to catch chained spawns. Otherwise it waits 5 seconds.
 
 ## Configuration
-Edit the user input section at the top of `GoldenClicker.py`:
-- `CONF_THRESHOLD` — minimum confidence to trigger a click (default: 0.8)
-- `SCAN_INTERVAL` — seconds between scans (default: 5)
-- `DISPLAY` — show live detection window (default: True)
 
-## Notes
-- Designed for Windows with multi-monitor support
-- Tested on a secondary monitor running at 150% DPI scaling
+- `port` (`CDPClient` argument): debugging port (default: `9222`)
+- `title_suffix` (`CDPClient` argument): the game's tab title must end with this (default: `"Cookie Clicker"`)
